@@ -1,0 +1,311 @@
+# ============================================================
+# BazarBD — API Gateway Configuration (Kong 3.x)
+# File: infrastructure/kong/kong.yml
+# ============================================================
+# Apply: deck sync --config kong.yml
+# Local dev: Kong runs in DB-less mode via declarative config
+# ============================================================
+
+_format_version: "3.0"
+_transform: true
+
+# ============================================================
+# SERVICES — each upstream microservice
+# ============================================================
+services:
+  - name: user-service
+    url: http://user-service:4001
+    connect_timeout: 5000
+    write_timeout: 10000
+    read_timeout: 10000
+
+  - name: auth-service
+    url: http://auth-service:4002
+    connect_timeout: 5000
+    write_timeout: 10000
+    read_timeout: 10000
+
+  - name: product-service
+    url: http://product-service:4003
+    connect_timeout: 5000
+    write_timeout: 15000   # longer for image uploads
+    read_timeout: 15000
+
+  - name: order-service
+    url: http://order-service:4004
+    connect_timeout: 5000
+    write_timeout: 15000
+    read_timeout: 15000
+
+  - name: cart-service
+    url: http://cart-service:4005
+    connect_timeout: 3000
+    write_timeout: 5000
+    read_timeout: 5000
+
+  - name: payment-service
+    url: http://payment-service:4006
+    connect_timeout: 5000
+    write_timeout: 30000   # payments can be slow
+    read_timeout: 30000
+
+  - name: shipping-service
+    url: http://shipping-service:4007
+    connect_timeout: 5000
+    write_timeout: 10000
+    read_timeout: 10000
+
+  - name: search-service
+    url: http://search-service:4008
+    connect_timeout: 3000
+    write_timeout: 5000
+    read_timeout: 5000
+
+# ============================================================
+# ROUTES
+# ============================================================
+routes:
+  # ── Auth ──────────────────────────────────────────────────
+  - name: auth-routes
+    service: auth-service
+    paths:
+      - /api/v1/auth
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Users ─────────────────────────────────────────────────
+  - name: user-routes
+    service: user-service
+    paths:
+      - /api/v1/users
+      - /api/v1/addresses
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Sellers ───────────────────────────────────────────────
+  - name: seller-routes
+    service: user-service
+    paths:
+      - /api/v1/sellers
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Products (public read, authenticated write) ───────────
+  - name: product-routes
+    service: product-service
+    paths:
+      - /api/v1/products
+      - /api/v1/categories
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Cart ──────────────────────────────────────────────────
+  - name: cart-routes
+    service: cart-service
+    paths:
+      - /api/v1/cart
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Orders ────────────────────────────────────────────────
+  - name: order-routes
+    service: order-service
+    paths:
+      - /api/v1/orders
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+  # ── Payments ──────────────────────────────────────────────
+  - name: payment-routes
+    service: payment-service
+    paths:
+      - /api/v1/payments
+    strip_path: false
+    methods: [GET, POST, OPTIONS]
+
+  # ── Shipping ──────────────────────────────────────────────
+  - name: shipping-routes
+    service: shipping-service
+    paths:
+      - /api/v1/shipping
+    strip_path: false
+    methods: [GET, POST, OPTIONS]
+
+  # ── Search ────────────────────────────────────────────────
+  - name: search-routes
+    service: search-service
+    paths:
+      - /api/v1/search
+    strip_path: false
+    methods: [GET, OPTIONS]
+
+  # ── Admin routes (strict — add IP restriction plugin in prod) ──
+  - name: admin-routes
+    service: user-service
+    paths:
+      - /api/v1/admin
+    strip_path: false
+    methods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+
+# ============================================================
+# PLUGINS — applied globally unless overridden per-route
+# ============================================================
+plugins:
+  # ── CORS ──────────────────────────────────────────────────
+  - name: cors
+    config:
+      origins:
+        - http://localhost:3000
+        - http://localhost:3001
+        - https://bazarbd.com
+        - https://admin.bazarbd.com
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Language
+        - Content-Language
+        - Content-Type
+        - Authorization
+        - X-Session-Id
+        - X-Request-Id
+      exposed_headers:
+        - X-Request-Id
+        - X-Rate-Limit-Remaining
+      credentials: true
+      max_age: 3600
+
+  # ── Rate limiting — anonymous (per IP) ───────────────────
+  - name: rate-limiting
+    config:
+      minute: 60
+      hour: 1000
+      policy: redis
+      redis_host: redis
+      redis_port: 6379
+      redis_password: bazarbd_redis_secret
+      redis_database: 1
+      fault_tolerant: true   # allow traffic if Redis is down
+      hide_client_headers: false
+      error_message: "Rate limit exceeded. Please slow down."
+
+  # ── Request ID — inject X-Request-Id for tracing ─────────
+  - name: correlation-id
+    config:
+      header_name: X-Request-Id
+      generator: uuid#counter
+      echo_downstream: true
+
+  # ── Response compression ──────────────────────────────────
+  - name: response-transformer
+    config:
+      add:
+        headers:
+          - "X-Powered-By: BazarBD"
+          - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+          - "X-Content-Type-Options: nosniff"
+          - "X-Frame-Options: DENY"
+
+  # ── Request size limit (16MB for image uploads) ───────────
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 16
+      size_unit: megabytes
+
+  # ── Bot detection (basic) ─────────────────────────────────
+  - name: bot-detection
+    config:
+      allow: []
+      deny:
+        - "curl"       # block raw curl in production (dev: remove)
+
+# ── Auth-specific rate limiting (stricter) ───────────────
+# Applied only to /api/v1/auth routes
+- name: auth-rate-limit
+  route: auth-routes
+  plugins:
+    - name: rate-limiting
+      config:
+        minute: 10
+        hour: 100
+        policy: redis
+        redis_host: redis
+        redis_port: 6379
+        redis_password: bazarbd_redis_secret
+        redis_database: 1
+
+# ── Payment routes — extra strict ─────────────────────────
+- name: payment-rate-limit
+  route: payment-routes
+  plugins:
+    - name: rate-limiting
+      config:
+        minute: 20
+        hour: 200
+        policy: redis
+        redis_host: redis
+        redis_port: 6379
+        redis_password: bazarbd_redis_secret
+        redis_database: 1
+
+# ── Admin routes — IP allowlist (production) ──────────────
+# In production, replace "0.0.0.0/0" with your office IP range
+# - name: admin-ip-restriction
+#   route: admin-routes
+#   plugins:
+#     - name: ip-restriction
+#       config:
+#         allow:
+#           - 203.0.113.0/24   # your office IP range
+#           - 10.0.0.0/8       # internal VPC
+
+# ============================================================
+# UPSTREAMS — health checks for each service
+# ============================================================
+upstreams:
+  - name: user-service
+    targets:
+      - target: user-service:4001
+        weight: 100
+    healthchecks:
+      active:
+        http_path: /health
+        healthy:
+          interval: 10
+          successes: 2
+        unhealthy:
+          interval: 5
+          http_failures: 3
+
+  - name: product-service
+    targets:
+      - target: product-service:4003
+        weight: 100
+    healthchecks:
+      active:
+        http_path: /health
+        healthy:
+          interval: 10
+          successes: 2
+        unhealthy:
+          interval: 5
+          http_failures: 3
+
+  - name: order-service
+    targets:
+      - target: order-service:4004
+        weight: 100
+    healthchecks:
+      active:
+        http_path: /health
+        healthy:
+          interval: 10
+          successes: 2
+        unhealthy:
+          interval: 5
+          http_failures: 3

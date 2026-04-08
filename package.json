@@ -1,0 +1,28 @@
+{
+  "name": "@bazarbd/monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.1.0",
+  "scripts": {
+    "dev":        "turbo run dev --concurrency=15",
+    "build":      "turbo run build",
+    "lint":       "turbo run lint",
+    "test":       "turbo run test",
+    "type-check": "turbo run type-check",
+    "clean":      "turbo run clean && rm -rf node_modules",
+    "dev:web":    "turbo run dev --filter=@bazarbd/web",
+    "dev:admin":  "turbo run dev --filter=@bazarbd/admin",
+    "dev:auth":   "turbo run dev --filter=@bazarbd/auth-service",
+    "dev:product":"turbo run dev --filter=@bazarbd/product-service",
+    "dev:order":  "turbo run dev --filter=@bazarbd/order-service",
+    "dev:cart":   "turbo run dev --filter=@bazarbd/cart-service",
+    "dev:payment":"turbo run dev --filter=@bazarbd/payment-service",
+    "dev:inventory":"turbo run dev --filter=@bazarbd/inventory-service",
+    "docker:up":  "docker compose up -d",
+    "docker:down":"docker compose down",
+    "db:init":    "docker exec -i bazarbd_postgres psql -U bazarbd -d bazarbd < infrastructure/sql/init.sql"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.x"
+  }
+}

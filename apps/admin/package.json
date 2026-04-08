@@ -1,0 +1,39 @@
+{
+  "name": "@bazarbd/admin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3001",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@bazarbd/types": "workspace:*",
+    "@tanstack/react-query": "^5.40.x",
+    "axios": "^1.7.x",
+    "class-variance-authority": "^0.7.x",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.400.x",
+    "next": "14.2.x",
+    "next-auth": "^4.24.x",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "recharts": "^3.8.0",
+    "tailwind-merge": "^2.6.1",
+    "zustand": "^4.5.x"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/react": "^18.x",
+    "@types/react-dom": "^18.x",
+    "@types/recharts": "^2.0.1",
+    "autoprefixer": "^10.4.x",
+    "eslint": "^9.x",
+    "eslint-config-next": "14.2.x",
+    "postcss": "^8.4.x",
+    "tailwindcss": "^3.4.x",
+    "typescript": "^5.4.x"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@bazarbd/order-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main",
+    "start:prod": "node dist/main",
+    "test": "jest",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.3.x",
+    "@nestjs/core": "^10.3.x",
+    "@nestjs/platform-express": "^10.3.x",
+    "@nestjs/config": "^3.2.x",
+    "@nestjs/typeorm": "^10.0.x",
+    "@nestjs/axios": "^3.0.x",
+    "@nestjs/swagger": "^7.3.x",
+    "@nestjs/event-emitter": "^2.0.x",
+    "@nestjs-modules/ioredis": "^2.0.x",
+    "typeorm": "^0.3.x",
+    "pg": "^8.11.x",
+    "ioredis": "^5.3.x",
+    "helmet": "^7.1.x",
+    "class-validator": "^0.14.x",
+    "class-transformer": "^0.5.x",
+    "reflect-metadata": "^0.2.x",
+    "rxjs": "^7.8.x",
+    "@bazarbd/types": "workspace:*",
+    "@bazarbd/common": "workspace:*"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.3.x",
+    "@nestjs/testing": "^10.3.x",
+    "typescript": "^5.4.x",
+    "@types/node": "^20.x",
+    "jest": "^29.7.x",
+    "ts-jest": "^29.1.x",
+    "@types/jest": "^29.5.x",
+    "ts-node": "^10.9.x"
+  }
+}

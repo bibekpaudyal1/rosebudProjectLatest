@@ -1,0 +1,28 @@
+{
+  "name": "@bazarbd/common",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@bazarbd/types": "workspace:^",
+    "@nestjs/common": "^10.3.x",
+    "@nestjs/core": "^10.3.x",
+    "@nestjs/jwt": "^10.2.x",
+    "@nestjs/passport": "^10.0.x",
+    "express": "^5.2.1",
+    "passport-jwt": "^4.0.x",
+    "reflect-metadata": "^0.2.x",
+    "rxjs": "^7.8.x"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/passport-jwt": "^4.0.x",
+    "typescript": "^5.4.x"
+  }
+}

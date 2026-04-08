@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@bazarbd/types": ["../../../packages/types/src"],
+      "@bazarbd/common": ["../../../packages/common/src"]
+    }
+  },
+  "include": ["src/**/*"]
+}

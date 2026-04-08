@@ -1,0 +1,283 @@
+# ============================================================
+# infrastructure/monitoring/prometheus-alerts.yml
+# BazarBD Production Alert Rules
+# Alerts are routed to PagerDuty (critical) or Slack (warning)
+# ============================================================
+
+groups:
+
+  # ── Payment Alerts (highest priority) ─────────────────────
+  - name: payments
+    rules:
+      - alert: PaymentSuccessRateLow
+        expr: |
+          (
+            rate(payment_completed_total[5m])
+            /
+            (rate(payment_completed_total[5m]) + rate(payment_failed_total[5m]))
+          ) < 0.90
+        for: 2m
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "Payment success rate below 90%"
+          description: "Payment success rate is {{ $value | humanizePercentage }} over last 5 minutes. Expected > 90%."
+          runbook: "https://wiki.bazarbd.com/runbooks/payment-failure"
+
+      - alert: BkashTokenExpirySoon
+        expr: (redis_key_ttl{key="bkash:access_token"} / 60) < 10
+        for: 1m
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "bKash access token expiring in < 10 minutes"
+          description: "The bKash access token will expire in {{ $value }} minutes. Automatic refresh should trigger."
+
+      - alert: PaymentGatewayDown
+        expr: |
+          sum(rate(payment_gateway_request_errors_total{gateway="bkash"}[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "bKash gateway errors spiking"
+          description: "{{ $value }} errors/min from bKash. Possible gateway outage."
+
+  # ── API Performance ────────────────────────────────────────
+  - name: api-performance
+    rules:
+      - alert: APILatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            rate(http_request_duration_seconds_bucket{service!~"notification.*"}[5m])
+          ) > 2
+        for: 3m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "API p99 latency > 2s on {{ $labels.service }}"
+          description: "p99 latency is {{ $value | humanizeDuration }} on {{ $labels.service }}:{{ $labels.route }}"
+
+      - alert: CheckoutLatencyCritical
+        expr: |
+          histogram_quantile(0.95,
+            rate(http_request_duration_seconds_bucket{route=~"/orders|/payments.*"}[5m])
+          ) > 5
+        for: 2m
+        labels:
+          severity: critical
+          team: backend
+        annotations:
+          summary: "Checkout flow p95 latency > 5s"
+          description: "Customers cannot complete purchases. Latency: {{ $value | humanizeDuration }}"
+
+      - alert: ErrorRateHigh
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) by (service)
+          /
+          sum(rate(http_requests_total[5m])) by (service)
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          team: backend
+        annotations:
+          summary: "Error rate > 5% on {{ $labels.service }}"
+          description: "{{ $value | humanizePercentage }} of requests are returning 5xx errors."
+
+  # ── Kafka Health ───────────────────────────────────────────
+  - name: kafka
+    rules:
+      - alert: KafkaConsumerLagHigh
+        expr: |
+          kafka_consumer_group_lag{topic="order.events"} > 1000
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Kafka consumer lag on order.events > 1000"
+          description: "Consumer group {{ $labels.group }} is {{ $value }} messages behind. Possible service slowdown."
+
+      - alert: KafkaConsumerLagCritical
+        expr: |
+          kafka_consumer_group_lag > 10000
+        for: 3m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Kafka consumer lag critical on {{ $labels.topic }}"
+          description: "{{ $labels.group }} is {{ $value }} messages behind on {{ $labels.topic }}. Service may be down."
+
+      - alert: KafkaBrokerDown
+        expr: count(kafka_broker_info) < 2
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Kafka broker count dropped below 2"
+          description: "Only {{ $value }} Kafka brokers are healthy. Minimum required: 2."
+
+  # ── Infrastructure ─────────────────────────────────────────
+  - name: infrastructure
+    rules:
+      - alert: PodCrashLooping
+        expr: |
+          rate(kube_pod_container_status_restarts_total{namespace="bazarbd"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} is crash-looping"
+          description: "{{ $labels.container }} in {{ $labels.pod }} has restarted {{ $value }} times in 15 min."
+
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{namespace="bazarbd", condition="true"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} not ready"
+
+      - alert: DeploymentReplicasMismatch
+        expr: |
+          kube_deployment_spec_replicas{namespace="bazarbd"}
+          !=
+          kube_deployment_status_available_replicas{namespace="bazarbd"}
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "{{ $labels.deployment }} replicas mismatch"
+          description: "Expected {{ $value }} replicas but fewer are available."
+
+      - alert: NodeDiskSpaceLow
+        expr: |
+          (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Node disk usage > 85% on {{ $labels.instance }}"
+
+      - alert: PostgreSQLConnectionPoolExhausted
+        expr: |
+          pg_stat_database_numbackends / pg_settings_max_connections > 0.80
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "PostgreSQL connection pool > 80% full"
+          description: "{{ $value | humanizePercentage }} of max connections in use. Risk of connection failures."
+
+  # ── Business Metrics ───────────────────────────────────────
+  - name: business
+    rules:
+      - alert: OrderVolumeDropped
+        expr: |
+          sum(rate(order_created_total[15m])) < 
+          (sum(rate(order_created_total[1h] offset 1d)) * 0.3)
+        for: 15m
+        labels:
+          severity: warning
+          team: product
+        annotations:
+          summary: "Order volume dropped > 70% vs yesterday"
+          description: "Current order rate is {{ $value }}/min. May indicate frontend or payment issues."
+
+      - alert: InventoryOutOfStock
+        expr: bazarbd_products_out_of_stock_total > 100
+        for: 30m
+        labels:
+          severity: warning
+          team: operations
+        annotations:
+          summary: "{{ $value }} products are out of stock"
+          description: "High out-of-stock count may be impacting conversion rate."
+
+
+# ============================================================
+# infrastructure/monitoring/prometheus.yml
+# Prometheus scrape configuration for all BazarBD services
+# ============================================================
+---
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: bazarbd-production
+    region:  ap-south-1
+
+rule_files:
+  - "prometheus-alerts.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # ── Kubernetes service discovery ──────────────────────────
+  - job_name: bazarbd-services
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names: [bazarbd]
+    relabel_configs:
+      # Only scrape pods with the prometheus.io/scrape annotation
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: service
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+
+  # ── Infrastructure components ─────────────────────────────
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+
+  - job_name: elasticsearch
+    static_configs:
+      - targets: ["elasticsearch-exporter:9114"]
+
+  - job_name: node-exporter
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '(.*):10250'
+        replacement: '${1}:9100'
+        target_label: __address__

@@ -1,0 +1,105 @@
+# ============================================================
+# infrastructure/kubernetes/00-namespace.yml
+# Creates the bazarbd namespace and base configuration
+# Apply: kubectl apply -f infrastructure/kubernetes/
+# ============================================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bazarbd
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    environment: production
+
+---
+# Resource quotas for the namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: bazarbd-quota
+  namespace: bazarbd
+spec:
+  hard:
+    requests.cpu:    "20"
+    requests.memory: "40Gi"
+    limits.cpu:      "40"
+    limits.memory:   "80Gi"
+    pods:            "100"
+
+---
+# Shared non-secret configuration
+# Secrets are in a separate sealed-secrets file (not committed to git)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bazarbd-config
+  namespace: bazarbd
+data:
+  NODE_ENV:              "production"
+  KAFKA_BROKERS:         "kafka-0.kafka-headless.bazarbd.svc.cluster.local:9092,kafka-1.kafka-headless.bazarbd.svc.cluster.local:9092,kafka-2.kafka-headless.bazarbd.svc.cluster.local:9092"
+  ELASTICSEARCH_URL:     "http://elasticsearch.bazarbd.svc.cluster.local:9200"
+  REDIS_URL:             "redis://redis-master.bazarbd.svc.cluster.local:6379"
+  USER_SERVICE_URL:      "http://user-service.bazarbd.svc.cluster.local:4001"
+  AUTH_SERVICE_URL:      "http://auth-service.bazarbd.svc.cluster.local:4002"
+  PRODUCT_SERVICE_URL:   "http://product-service.bazarbd.svc.cluster.local:4003"
+  ORDER_SERVICE_URL:     "http://order-service.bazarbd.svc.cluster.local:4004"
+  CART_SERVICE_URL:      "http://cart-service.bazarbd.svc.cluster.local:4005"
+  PAYMENT_SERVICE_URL:   "http://payment-service.bazarbd.svc.cluster.local:4006"
+  SHIPPING_SERVICE_URL:  "http://shipping-service.bazarbd.svc.cluster.local:4007"
+  INVENTORY_SERVICE_URL: "http://inventory-service.bazarbd.svc.cluster.local:4008"
+  CORS_ORIGINS:          "https://bazarbd.com,https://admin.bazarbd.com,https://seller.bazarbd.com"
+  LOG_LEVEL:             "warn"
+
+---
+# Secrets template — VALUES MUST BE BASE64-ENCODED
+# In production: use sealed-secrets or AWS Secrets Manager CSI driver
+# NEVER commit actual secret values to git
+# Generate: echo -n "your-secret" | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bazarbd-secrets
+  namespace: bazarbd
+  annotations:
+    # Remind operators this is a template
+    bazarbd.com/secret-type: "template-replace-before-apply"
+type: Opaque
+stringData:
+  # Database
+  DATABASE_URL:           "postgresql://bazarbd:CHANGE_ME@postgres-primary.bazarbd.svc.cluster.local:5432/bazarbd"
+  # Redis
+  REDIS_PASSWORD:         "CHANGE_ME"
+  # JWT
+  JWT_ACCESS_SECRET:      "CHANGE_ME_minimum_32_chars_random_string"
+  JWT_REFRESH_SECRET:     "CHANGE_ME_minimum_32_chars_random_string"
+  # bKash
+  BKASH_APP_KEY:          "CHANGE_ME"
+  BKASH_APP_SECRET:       "CHANGE_ME"
+  BKASH_USERNAME:         "CHANGE_ME"
+  BKASH_PASSWORD:         "CHANGE_ME"
+  # Nagad
+  NAGAD_MERCHANT_ID:      "CHANGE_ME"
+  NAGAD_MERCHANT_PRIVATE_KEY: "CHANGE_ME"
+  # SSLCommerz
+  SSLCOMMERZ_STORE_ID:    "CHANGE_ME"
+  SSLCOMMERZ_STORE_PASSWORD: "CHANGE_ME"
+  # Cloudflare R2
+  R2_ACCOUNT_ID:          "CHANGE_ME"
+  R2_ACCESS_KEY_ID:       "CHANGE_ME"
+  R2_SECRET_ACCESS_KEY:   "CHANGE_ME"
+  # Pathao
+  PATHAO_CLIENT_ID:       "CHANGE_ME"
+  PATHAO_CLIENT_SECRET:   "CHANGE_ME"
+  PATHAO_USERNAME:        "CHANGE_ME"
+  PATHAO_PASSWORD:        "CHANGE_ME"
+  # RedX
+  REDX_API_TOKEN:         "CHANGE_ME"
+  # SMS
+  SMS_SSL_WIRELESS_TOKEN: "CHANGE_ME"
+  # Google OAuth
+  GOOGLE_CLIENT_ID:       "CHANGE_ME"
+  GOOGLE_CLIENT_SECRET:   "CHANGE_ME"
+  # NextAuth
+  NEXTAUTH_SECRET:        "CHANGE_ME_minimum_32_chars"

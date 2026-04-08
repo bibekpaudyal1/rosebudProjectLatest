@@ -1,0 +1,251 @@
+# ============================================================
+# .github/workflows/cd.yml
+# BazarBD CD Pipeline
+# Triggers: CI workflow completes on main branch
+# Flow: deploy staging → smoke tests → deploy prod → notify
+# ============================================================
+
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false    # Never cancel an in-flight production deploy
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/bazarbd
+
+jobs:
+  # ── Only proceed if CI passed ──────────────────────────────
+  check-ci:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - run: echo "CI passed — proceeding with deployment"
+
+  # ── Deploy to staging ──────────────────────────────────────
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: check-ci
+    environment: staging
+    outputs:
+      sha: ${{ steps.get-sha.outputs.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get commit SHA from CI run
+        id: get-sha
+        run: echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure kubectl (staging)
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+      - name: Update image tags in staging manifests
+        run: |
+          SHA="${{ steps.get-sha.outputs.sha }}"
+          for service in user-service auth-service product-service order-service \
+                         cart-service payment-service shipping-service inventory-service; do
+            kubectl set image deployment/${service} \
+              ${service}=${{ env.IMAGE_PREFIX }}/${service}:sha-${SHA} \
+              -n bazarbd-staging
+          done
+          kubectl set image deployment/web \
+            web=${{ env.IMAGE_PREFIX }}/web:sha-${SHA} \
+            -n bazarbd-staging
+
+      - name: Wait for staging rollout
+        run: |
+          for service in user-service auth-service product-service order-service \
+                         cart-service payment-service shipping-service inventory-service web; do
+            kubectl rollout status deployment/${service} \
+              -n bazarbd-staging --timeout=5m
+          done
+
+      - name: Tag staging success
+        run: echo "✅ Staging deploy complete for SHA ${{ steps.get-sha.outputs.sha }}"
+
+  # ── Smoke tests against staging ───────────────────────────
+  smoke-tests:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: staging
+
+    env:
+      STAGING_URL: ${{ vars.STAGING_API_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Health check — all services
+        run: |
+          SERVICES=(
+            "${{ env.STAGING_URL }}/api/v1/health"
+          )
+          for url in "${SERVICES[@]}"; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$url")
+            if [ "$STATUS" != "200" ]; then
+              echo "❌ Health check failed for $url (status: $STATUS)"
+              exit 1
+            fi
+            echo "✅ $url — $STATUS"
+          done
+
+      - name: API smoke tests
+        run: |
+          # Test product search endpoint
+          RESULT=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ env.STAGING_URL }}/api/v1/products?limit=5&status=active")
+          [ "$RESULT" = "200" ] && echo "✅ Product search OK" || (echo "❌ Product search failed: $RESULT" && exit 1)
+
+          # Test categories
+          RESULT=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ env.STAGING_URL }}/api/v1/categories")
+          [ "$RESULT" = "200" ] && echo "✅ Categories OK" || (echo "❌ Categories failed: $RESULT" && exit 1)
+
+          # Test auth endpoint exists
+          RESULT=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "${{ env.STAGING_URL }}/api/v1/auth/login" \
+            -H "Content-Type: application/json" \
+            -d '{"phone": "invalid", "password": "invalid"}')
+          [ "$RESULT" = "401" ] || [ "$RESULT" = "400" ] && echo "✅ Auth endpoint OK" || (echo "❌ Auth endpoint failed: $RESULT" && exit 1)
+
+          echo "✅ All smoke tests passed"
+
+      - name: Run E2E tests against staging
+        run: pnpm --filter @bazarbd/web run test:e2e
+        env:
+          BASE_URL: ${{ vars.STAGING_WEB_URL }}
+        continue-on-error: true    # E2E failures are reported but don't block prod deploy
+
+  # ── Deploy to production ───────────────────────────────────
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    environment: production    # Requires manual approval via GitHub Environments
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl (production)
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+
+      - name: Record current image digests (for rollback)
+        id: current-images
+        run: |
+          kubectl get deployment user-service -n bazarbd \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' > /tmp/rollback-image.txt
+          echo "rollback-image=$(cat /tmp/rollback-image.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy all services — rolling update
+        id: deploy
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          SERVICES=(
+            user-service auth-service product-service order-service
+            cart-service payment-service shipping-service inventory-service
+          )
+          for service in "${SERVICES[@]}"; do
+            echo "Deploying ${service}:sha-${SHA}..."
+            kubectl set image deployment/${service} \
+              ${service}=${{ env.IMAGE_PREFIX }}/${service}:sha-${SHA} \
+              -n bazarbd
+            kubectl annotate deployment/${service} \
+              kubernetes.io/change-cause="sha-${SHA} deployed by ${{ github.actor }}" \
+              --overwrite -n bazarbd
+          done
+
+          # Deploy web apps
+          kubectl set image deployment/web \
+            web=${{ env.IMAGE_PREFIX }}/web:sha-${SHA} -n bazarbd
+          kubectl set image deployment/admin \
+            admin=${{ env.IMAGE_PREFIX }}/admin:sha-${SHA} -n bazarbd
+
+      - name: Wait for production rollout
+        run: |
+          SERVICES=(
+            user-service auth-service product-service order-service
+            cart-service payment-service shipping-service inventory-service
+            web admin
+          )
+          for service in "${SERVICES[@]}"; do
+            echo "Waiting for ${service}..."
+            kubectl rollout status deployment/${service} \
+              -n bazarbd --timeout=10m
+          done
+
+      - name: Production health verification
+        run: |
+          sleep 30    # Allow load balancer to stabilise
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 15 "${{ vars.PROD_API_URL }}/api/v1/health")
+          if [ "$STATUS" != "200" ]; then
+            echo "❌ Production health check failed (status: $STATUS)"
+            echo "Triggering rollback..."
+            exit 1
+          fi
+          echo "✅ Production health check passed"
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outcome == 'success'
+        run: |
+          echo "⚠️ Deployment failed — rolling back..."
+          SERVICES=(
+            user-service auth-service product-service order-service
+            cart-service payment-service shipping-service inventory-service
+            web admin
+          )
+          for service in "${SERVICES[@]}"; do
+            kubectl rollout undo deployment/${service} -n bazarbd || true
+          done
+          echo "✅ Rollback complete"
+
+  # ── Notify Slack ───────────────────────────────────────────
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    steps:
+      - name: Slack notification
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ needs.deploy-production.result == 'success' && '✅ Production deployed' || '❌ Production deploy failed' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ needs.deploy-production.result == 'success' && '✅ *BazarBD deployed to production*' || '❌ *BazarBD production deploy FAILED*' }}\n\nCommit: `${{ github.event.workflow_run.head_sha }}`\nDeployed by: ${{ github.actor }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

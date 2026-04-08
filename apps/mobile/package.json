@@ -1,0 +1,56 @@
+{
+  "name": "@bazarbd/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "dev": "expo start",
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
+    "@expo/vector-icons": "^14.x",
+    "@tanstack/react-query": "^5.40.x",
+    "axios": "^1.7.x",
+    "expo": "^51.x",
+    "expo-clipboard": "^55.0.9",
+    "expo-constants": "^55.0.9",
+    "expo-device": "^55.0.10",
+    "expo-font": "^12.x",
+    "expo-haptics": "^55.0.9",
+    "expo-image": "^55.0.6",
+    "expo-notifications": "^55.0.13",
+    "expo-router": "^3.x",
+    "expo-secure-store": "^55.0.9",
+    "expo-splash-screen": "^0.27.x",
+    "expo-status-bar": "^1.11.x",
+    "lucide-react-native": "^0.577.0",
+    "nativewind": "^2.x",
+    "react": "^18.3.0",
+    "react-native": "^0.74.x",
+    "react-native-flash-message": "^0.4.2",
+    "react-native-gesture-handler": "^2.x",
+    "react-native-mmkv": "^4.2.0",
+    "react-native-reanimated": "^3.x",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^3.x",
+    "zustand": "^4.5.x"
+  },
+  "devDependencies": {
+    "@react-native-community/eslint-config": "^3.x",
+    "@types/react": "^18.x",
+    "@types/react-native": "^0.73.0",
+    "eslint": "^9.x",
+    "typescript": "^5.4.x"
+  },
+  "expo": {
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

@@ -1,0 +1,611 @@
+# ============================================================
+# infrastructure/kubernetes/01-services.yml
+# Kubernetes Deployments + Services + HPA for all microservices
+# ============================================================
+
+# ── USER SERVICE ───────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: bazarbd
+  labels:
+    app: user-service
+    version: "1.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0      # Zero downtime: new pods must start before old ones stop
+  template:
+    metadata:
+      labels:
+        app: user-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4001"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: user-service
+          image: ghcr.io/bazarbd/bazarbd/user-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4001
+          envFrom:
+            - configMapRef:
+                name: bazarbd-config
+            - secretRef:
+                name: bazarbd-secrets
+          env:
+            - name: PORT
+              value: "4001"
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "256Mi"
+            limits:
+              cpu:    "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4001
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 4001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]    # Allow in-flight requests to complete
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: user-service
+                topologyKey: kubernetes.io/hostname    # Spread pods across nodes
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 4001
+      targetPort: 4001
+      protocol: TCP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: user-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: user-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300    # 5 min: don't scale down too aggressively
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+# ── AUTH SERVICE ────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: bazarbd
+  labels:
+    app: auth-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: auth-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4002"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: auth-service
+          image: ghcr.io/bazarbd/bazarbd/auth-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4002
+          envFrom:
+            - configMapRef: { name: bazarbd-config }
+            - secretRef:    { name: bazarbd-secrets }
+          env:
+            - name: PORT
+              value: "4002"
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 4002 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 4002 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 4002
+      targetPort: 4002
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: auth-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+
+# ── PRODUCT SERVICE ─────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: bazarbd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: product-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: product-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4003"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: product-service
+          image: ghcr.io/bazarbd/bazarbd/product-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4003
+          envFrom:
+            - configMapRef: { name: bazarbd-config }
+            - secretRef:    { name: bazarbd-secrets }
+          env:
+            - name: PORT
+              value: "4003"
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1",    memory: "1Gi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 4003 }
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 4003 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: product-service
+  ports:
+    - port: 4003
+      targetPort: 4003
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: product-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: product-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+
+# ── ORDER SERVICE ───────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: bazarbd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: order-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: order-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4004"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 60    # Longer: don't kill mid-checkout
+      containers:
+        - name: order-service
+          image: ghcr.io/bazarbd/bazarbd/order-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4004
+          envFrom:
+            - configMapRef: { name: bazarbd-config }
+            - secretRef:    { name: bazarbd-secrets }
+          env:
+            - name: PORT
+              value: "4004"
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits:   { cpu: "1",    memory: "1Gi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 4004 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 4004 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: 4004
+      targetPort: 4004
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+
+# ── PAYMENT SERVICE ─────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: bazarbd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: payment-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4006"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: payment-service
+          image: ghcr.io/bazarbd/bazarbd/payment-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4006
+          envFrom:
+            - configMapRef: { name: bazarbd-config }
+            - secretRef:    { name: bazarbd-secrets }
+          env:
+            - name: PORT
+              value: "4006"
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 4006 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 4006 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: payment-service
+  ports:
+    - port: 4006
+      targetPort: 4006
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }
+
+# ── NOTIFICATION SERVICE ─────────────────────────────────────
+# High max replicas — spikes during flash sales
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: bazarbd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 2, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels:
+        app: notification-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "4009"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: notification-service
+          image: ghcr.io/bazarbd/bazarbd/notification-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4009
+          envFrom:
+            - configMapRef: { name: bazarbd-config }
+            - secretRef:    { name: bazarbd-secrets }
+          env:
+            - name: PORT
+              value: "4009"
+          resources:
+            requests: { cpu: "50m",  memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /health, port: 4009 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: bazarbd
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - port: 4009
+      targetPort: 4009
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: notification-service-hpa
+  namespace: bazarbd
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-service
+  minReplicas: 2
+  maxReplicas: 20    # Flash sales can spike to 20x normal notification volume
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 60 }
+
+# ── INGRESS (Nginx Ingress Controller) ───────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bazarbd-ingress
+  namespace: bazarbd
+  annotations:
+    kubernetes.io/ingress.class:              nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex:    "true"
+    cert-manager.io/cluster-issuer:           letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size:    "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    # Rate limiting at ingress level
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+spec:
+  tls:
+    - hosts:
+        - bazarbd.com
+        - api.bazarbd.com
+        - admin.bazarbd.com
+        - seller.bazarbd.com
+      secretName: bazarbd-tls-cert
+  rules:
+    - host: api.bazarbd.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway    # Kong
+                port:
+                  number: 8000
+
+    - host: bazarbd.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 3000
+
+    - host: admin.bazarbd.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: admin
+                port:
+                  number: 3001
+
+    - host: seller.bazarbd.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: seller
+                port:
+                  number: 3002
